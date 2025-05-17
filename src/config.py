@@ -1,4 +1,5 @@
 """
+
 Configuration settings for the trade simulator.
 """
 
