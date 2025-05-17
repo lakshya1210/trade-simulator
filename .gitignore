@@ -1,0 +1,30 @@
+# Environment variables
+.env
+
+
+# Python package metadata
+*.egg-info/
+gq_trade_simulator.egg-info/
+dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+.DS_Store
