@@ -1,0 +1,2 @@
+[console_scripts]
+gq-simulator = src.main:run
