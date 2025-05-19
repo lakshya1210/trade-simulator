@@ -52,11 +52,10 @@ async def main():
     controller = SimulatorController(
         orderbook, slippage_model, maker_taker_model, market_impact_model
     )
-    logger.info("Created simulator controller")
     
-    # Start WebSocket client
-    ws_client.start()
-    logger.info("Started WebSocket client")
+    # Set WebSocket client in controller
+    controller.set_websocket_client(ws_client)
+    logger.info("Created simulator controller")
     
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_event_loop()

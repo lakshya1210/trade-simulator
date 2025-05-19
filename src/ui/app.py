@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSplitter
+    QSplitter, QTextEdit
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QFont, QColor, QPalette
@@ -35,6 +35,7 @@ class SimulatorUI(QMainWindow):
         
         self.controller = simulator_controller
         self.last_update_time = 0
+        self.connected = False
         
         # Set up the UI
         self.init_ui()
@@ -113,19 +114,33 @@ class SimulatorUI(QMainWindow):
         # Add input layout to group
         input_group.setLayout(input_layout)
         
-        # Add calculate button
+        # Add buttons
+        button_layout = QHBoxLayout()
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.on_connect)
+        button_layout.addWidget(self.connect_button)
+        
         self.calculate_button = QPushButton("Calculate")
         self.calculate_button.clicked.connect(self.on_calculate)
+        button_layout.addWidget(self.calculate_button)
         
         # Add connection status
         self.connection_status = QLabel("Connection Status: Disconnected")
         self.connection_status.setStyleSheet("color: red;")
         
+        # Add log display
+        log_group = QGroupBox("Log Messages")
+        log_layout = QVBoxLayout()
+        self.log_display = QTextEdit()
+        self.log_display.setReadOnly(True)
+        log_layout.addWidget(self.log_display)
+        log_group.setLayout(log_layout)
+        
         # Add input group and button to left layout
         left_layout.addWidget(input_group)
-        left_layout.addWidget(self.calculate_button)
+        left_layout.addLayout(button_layout)
         left_layout.addWidget(self.connection_status)
-        left_layout.addStretch()
+        left_layout.addWidget(log_group)
         
         # Create right panel (output parameters)
         right_panel = QWidget()
@@ -193,12 +208,10 @@ class SimulatorUI(QMainWindow):
         self.last_update_time = current_time
         
         # Update connection status
-        if self.controller.is_connected():
-            self.connection_status.setText("Connection Status: Connected")
-            self.connection_status.setStyleSheet("color: green;")
-        else:
-            self.connection_status.setText("Connection Status: Disconnected")
-            self.connection_status.setStyleSheet("color: red;")
+        is_connected = self.controller.is_connected()
+        if is_connected != self.connected:
+            self.connected = is_connected
+            self.update_connection_status()
         
         # Update price
         mid_price = self.controller.get_mid_price()
@@ -252,6 +265,36 @@ class SimulatorUI(QMainWindow):
                 size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.orderbook_table.setItem(i, 3, size_item)
     
+    def on_connect(self):
+        """Handle connect/disconnect button click event."""
+        if not self.connected:
+            # Try to connect
+            self.log_message("Attempting to connect to WebSocket...")
+            result = self.controller.connect()
+            if result:
+                self.log_message("Connection request sent successfully")
+            else:
+                self.log_message("Failed to initiate connection")
+        else:
+            # Disconnect
+            self.log_message("Disconnecting from WebSocket...")
+            self.controller.disconnect()
+            self.log_message("Disconnected from WebSocket")
+        
+        # Update button text
+        self.update_connection_status()
+    
+    def update_connection_status(self):
+        """Update the connection status display."""
+        if self.connected:
+            self.connection_status.setText("Connection Status: Connected")
+            self.connection_status.setStyleSheet("color: green;")
+            self.connect_button.setText("Disconnect")
+        else:
+            self.connection_status.setText("Connection Status: Disconnected")
+            self.connection_status.setStyleSheet("color: red;")
+            self.connect_button.setText("Connect")
+    
     def on_calculate(self):
         """Handle calculate button click event."""
         # Get input parameters
@@ -282,6 +325,14 @@ class SimulatorUI(QMainWindow):
         self.net_cost_label.setText(f"{results['net_cost']:.4f}% (${results['net_cost_usd']:.2f})")
         self.maker_taker_label.setText(f"{results['maker_proportion']*100:.1f}% / {100-results['maker_proportion']*100:.1f}%")
         self.latency_label.setText(f"{results['latency_ms']:.2f} ms")
+    
+    def log_message(self, message):
+        """Add a message to the log display."""
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_display.append(f"[{timestamp}] {message}")
+        # Scroll to bottom
+        scrollbar = self.log_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
 
 class SimulatorController:
@@ -304,9 +355,30 @@ class SimulatorController:
         self.slippage_model = slippage_model
         self.maker_taker_model = maker_taker_model
         self.market_impact_model = market_impact_model
+        self.ws_client = None
+    
+    def set_websocket_client(self, ws_client):
+        """Set the WebSocket client."""
+        self.ws_client = ws_client
+    
+    def connect(self):
+        """Connect to WebSocket."""
+        if self.ws_client:
+            self.ws_client.start()
+            return True
+        return False
+    
+    def disconnect(self):
+        """Disconnect from WebSocket."""
+        if self.ws_client:
+            self.ws_client.stop()
+            return True
+        return False
     
     def is_connected(self):
         """Check if the WebSocket connection is active."""
+        if self.ws_client:
+            return self.ws_client.is_connected() and self.orderbook.is_valid()
         return self.orderbook.is_valid()
     
     def get_mid_price(self):

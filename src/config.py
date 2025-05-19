@@ -4,7 +4,7 @@ Configuration settings for the trade simulator.
 """
 
 # WebSocket endpoint
-WEBSOCKET_URL = "wss://ws.gomarket-cpp.goquant.io/ws/l2-orderbook/okx/BTC-USDT-SWAP"
+WEBSOCKET_URL = "wss://ws.okx.com/ws/v5/public"
 # Default input parameters
 DEFAULT_EXCHANGE = "OKX"
 DEFAULT_ASSET = "BTC-USDT"

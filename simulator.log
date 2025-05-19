@@ -75,3 +75,12 @@
 2025-05-16 16:29:04.407 | INFO     | __main__:main:59 - Started WebSocket client
 2025-05-16 16:29:04.407 | INFO     | __main__:main:75 - Starting UI application
 2025-05-16 16:42:36.660 | WARNING  | src.ui.app:calculate_transaction_costs:342 - Cannot calculate costs: no valid orderbook data
+2025-05-19 10:05:58.363 | INFO     | __main__:main:28 - Starting trade simulator application
+2025-05-19 10:05:58.363 | INFO     | __main__:main:32 - Created orderbook processor
+2025-05-19 10:05:58.363 | INFO     | __main__:main:40 - Created WebSocket client
+2025-05-19 10:05:58.363 | INFO     | __main__:main:45 - Created regression models
+2025-05-19 10:05:58.363 | INFO     | __main__:main:49 - Created market impact model
+2025-05-19 10:05:58.363 | INFO     | __main__:main:58 - Created simulator controller
+2025-05-19 10:05:58.364 | INFO     | __main__:main:74 - Starting UI application
+2025-05-19 10:06:04.376 | INFO     | src.data_handlers.websocket_client:start:135 - WebSocket client started
+2025-05-19 10:06:28.758 | WARNING  | src.data_handlers.websocket_client:start:130 - WebSocket client already running
