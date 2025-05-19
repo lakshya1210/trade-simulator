@@ -1,15 +1,23 @@
 """
-
 Configuration settings for the trade simulator.
 """
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+try:
+    load_dotenv()
+except ImportError:
+    pass  # dotenv module not available
 
 # WebSocket endpoint
-WEBSOCKET_URL = "wss://ws.okx.com/ws/v5/public"
+WEBSOCKET_URL = os.getenv("WEBSOCKET_URL", "wss://ws.okx.com/ws/v5/public")
+
 # Default input parameters
 DEFAULT_EXCHANGE = "OKX"
-DEFAULT_ASSET = "BTC-USDT"
+DEFAULT_ASSET = os.getenv("DEFAULT_ASSET", "BTC-USDT")
 DEFAULT_ORDER_TYPE = "market"
-DEFAULT_QUANTITY = 100  # USD equivalent
+DEFAULT_QUANTITY = float(os.getenv("DEFAULT_QUANTITY", "100"))  # USD equivalent
 DEFAULT_VOLATILITY = 0.01  # Default volatility, can be updated from exchange data
 DEFAULT_FEE_TIER = "Tier 1"  # Default fee tier based on OKX documentation
 
@@ -33,7 +41,7 @@ AC_PARAMETERS = {
 UI_REFRESH_RATE_MS = 500  # Update UI every 500ms
 
 # Logging configuration
-LOG_LEVEL = "INFO"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")  # Changed to DEBUG for troubleshooting
 
 # Available spot assets for OKX
 AVAILABLE_ASSETS = [

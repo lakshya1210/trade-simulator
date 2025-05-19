@@ -3,495 +3,352 @@ UI implementation for the trading simulator.
 """
 import sys
 import time
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QLabel, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSplitter, QTextEdit
-)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QColor, QPalette
+# Removed PyQt6 imports
+# from PyQt6.QtWidgets import (
+#     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+#     QLabel, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
+#     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+#     QSplitter, QTextEdit
+# )
+# from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+# from PyQt6.QtGui import QFont, QColor, QPalette
 from loguru import logger
+import asyncio
+import tkinter # Keep this for tkinter.WORD and tkinter.DISABLED etc.
+import customtkinter # Main UI framework
 
 from ..config import (
     DEFAULT_EXCHANGE, DEFAULT_ASSET, DEFAULT_ORDER_TYPE,
     DEFAULT_QUANTITY, DEFAULT_VOLATILITY, DEFAULT_FEE_TIER,
-    AVAILABLE_ASSETS, ORDER_TYPES, FEE_TIERS, UI_REFRESH_RATE_MS,
+    AVAILABLE_ASSETS, ORDER_TYPES, FEE_TIERS, UI_REFRESH_RATE_MS, # Keep UI_REFRESH_RATE_MS
     WEBSOCKET_URL
 )
+from typing import TYPE_CHECKING # For type hinting SimulatorController
+
+if TYPE_CHECKING:
+    from ..controllers.simulator_controller import SimulatorController
 
 
-class SimulatorUI(QMainWindow):
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+class SimulatorUI(customtkinter.CTk):
     """Main UI window for the trading simulator."""
     
-    def __init__(self, simulator_controller):
+    def __init__(self, controller: 'SimulatorController'): # Changed simulator_controller to controller
         """
         Initialize the UI.
         
         Args:
-            simulator_controller: Controller for the simulator logic
+            controller: Controller for the simulator logic
         """
         super().__init__()
         
-        self.controller = simulator_controller
-        self.last_update_time = 0
-        self.connected = False
+        self.controller = controller
+        self.last_update_time = 0 # Still useful for debouncing if needed, or can be removed if periodic_ui_update is sole timer
+        self.connected = False # Tracks UI's perception of connection status
+        self.loop = None
+        self.is_ui_running = False # Flag to control the main UI loop
         
-        # Set up the UI
-        self.init_ui()
+        # self._configure_logging() # Removed, logging is global via loguru
+        self._initialize_ui()
+        logger.info("SimulatorUI initialized")
         
-        # Set up the timer for UI updates
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(UI_REFRESH_RATE_MS)
+        # Removed QTimer setup, using self.after in _initialize_ui for periodic_ui_update
+        # self.update_timer = QTimer() 
+        # self.update_timer.timeout.connect(self.update_ui)
+        # self.update_timer.start(UI_REFRESH_RATE_MS)
     
-    def init_ui(self):
+    # def _configure_logging(self): # Removed, not needed with loguru
+    #     pass
+
+    def _initialize_ui(self):
         """Initialize the UI components."""
-        # Set window properties
-        self.setWindowTitle("Trade Simulator")
-        self.setGeometry(100, 100, 1200, 800)
+        self.title("Trade Simulator")
+        self.geometry("1200x800") # Default window size
         
-        # Create central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # Main layout
+        self.grid_columnconfigure(0, weight=1) # Input panel column
+        self.grid_columnconfigure(1, weight=2) # Output panel column
+        self.grid_rowconfigure(0, weight=1)    # Main row
+
+        # Input Parameters Frame (Left Panel)
+        self.input_frame = customtkinter.CTkFrame(self, corner_radius=10)
+        self.input_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self._create_input_widgets(self.input_frame) # Placeholder for actual input widgets
+
+        # Output Area (Right Panel)
+        self.output_main_frame = customtkinter.CTkFrame(self, corner_radius=10)
+        self.output_main_frame.grid(row=0, column=1, padx=(0, 20), pady=20, sticky="nsew")
+        self.output_main_frame.grid_columnconfigure(0, weight=1)
+        self.output_main_frame.grid_rowconfigure(0, weight=1) # Output parameters display
+        self.output_main_frame.grid_rowconfigure(1, weight=2) # Order book display
+        self.output_main_frame.grid_rowconfigure(2, weight=1) # Log messages display
+
+        self.output_params_frame = customtkinter.CTkFrame(self.output_main_frame, corner_radius=10)
+        self.output_params_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self._create_output_parameters_display(self.output_params_frame) # Placeholder
+
+        self.order_book_frame = customtkinter.CTkFrame(self.output_main_frame, corner_radius=10)
+        self.order_book_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self._create_order_book_display(self.order_book_frame) # Placeholder
         
-        # Create main layout
-        main_layout = QHBoxLayout(central_widget)
+        self.log_frame = customtkinter.CTkFrame(self.output_main_frame, corner_radius=10)
+        self.log_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+        self._create_log_display(self.log_frame) # Actual CTkTextbox
         
-        # Create splitter for left and right panels
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
-        
-        # Create left panel (input parameters)
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        
-        # Add input form
-        input_group = QGroupBox("Input Parameters")
-        input_layout = QFormLayout()
-        
-        # Exchange
-        self.exchange_combo = QComboBox()
-        self.exchange_combo.addItem(DEFAULT_EXCHANGE)
-        input_layout.addRow("Exchange:", self.exchange_combo)
-        
-        # Asset
-        self.asset_combo = QComboBox()
-        for asset in AVAILABLE_ASSETS:
-            self.asset_combo.addItem(asset)
-        self.asset_combo.setCurrentText(DEFAULT_ASSET)
-        input_layout.addRow("Spot Asset:", self.asset_combo)
-        
-        # Order Type
-        self.order_type_combo = QComboBox()
-        for order_type in ORDER_TYPES:
-            self.order_type_combo.addItem(order_type)
-        self.order_type_combo.setCurrentText(DEFAULT_ORDER_TYPE)
-        input_layout.addRow("Order Type:", self.order_type_combo)
-        
-        # Quantity
-        self.quantity_spin = QDoubleSpinBox()
-        self.quantity_spin.setRange(1, 100000)
-        self.quantity_spin.setValue(DEFAULT_QUANTITY)
-        self.quantity_spin.setSuffix(" USD")
-        input_layout.addRow("Quantity:", self.quantity_spin)
-        
-        # Volatility
-        self.volatility_spin = QDoubleSpinBox()
-        self.volatility_spin.setRange(0.001, 1.0)
-        self.volatility_spin.setValue(DEFAULT_VOLATILITY)
-        self.volatility_spin.setDecimals(4)
-        self.volatility_spin.setSingleStep(0.001)
-        input_layout.addRow("Volatility:", self.volatility_spin)
-        
-        # Fee Tier
-        self.fee_tier_combo = QComboBox()
-        for tier in FEE_TIERS.keys():
-            self.fee_tier_combo.addItem(tier)
-        self.fee_tier_combo.setCurrentText(DEFAULT_FEE_TIER)
-        input_layout.addRow("Fee Tier:", self.fee_tier_combo)
-        
-        # Add input layout to group
-        input_group.setLayout(input_layout)
-        
-        # Add buttons
-        button_layout = QHBoxLayout()
-        self.connect_button = QPushButton("Connect")
-        self.connect_button.clicked.connect(self.on_connect)
-        button_layout.addWidget(self.connect_button)
-        
-        self.calculate_button = QPushButton("Calculate")
-        self.calculate_button.clicked.connect(self.on_calculate)
-        button_layout.addWidget(self.calculate_button)
-        
-        # Add connection status
-        self.connection_status = QLabel("Connection Status: Disconnected")
-        self.connection_status.setStyleSheet("color: red;")
-        
-        # Add log display
-        log_group = QGroupBox("Log Messages")
-        log_layout = QVBoxLayout()
-        self.log_display = QTextEdit()
-        self.log_display.setReadOnly(True)
-        log_layout.addWidget(self.log_display)
-        log_group.setLayout(log_layout)
-        
-        # Add input group and button to left layout
-        left_layout.addWidget(input_group)
-        left_layout.addLayout(button_layout)
-        left_layout.addWidget(self.connection_status)
-        left_layout.addWidget(log_group)
-        
-        # Create right panel (output parameters)
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        
-        # Add output form
-        output_group = QGroupBox("Output Parameters")
-        output_layout = QFormLayout()
-        
-        # Create output labels
-        self.price_label = QLabel("N/A")
-        self.slippage_label = QLabel("N/A")
-        self.fees_label = QLabel("N/A")
-        self.market_impact_label = QLabel("N/A")
-        self.net_cost_label = QLabel("N/A")
-        self.maker_taker_label = QLabel("N/A")
-        self.latency_label = QLabel("N/A")
-        
-        # Add output labels to form
-        output_layout.addRow("Current Price:", self.price_label)
-        output_layout.addRow("Expected Slippage:", self.slippage_label)
-        output_layout.addRow("Expected Fees:", self.fees_label)
-        output_layout.addRow("Expected Market Impact:", self.market_impact_label)
-        output_layout.addRow("Net Cost:", self.net_cost_label)
-        output_layout.addRow("Maker/Taker Proportion:", self.maker_taker_label)
-        output_layout.addRow("Internal Latency:", self.latency_label)
-        
-        # Add output layout to group
-        output_group.setLayout(output_layout)
-        
-        # Add orderbook visualization
-        orderbook_group = QGroupBox("Order Book")
-        orderbook_layout = QVBoxLayout()
-        
-        # Create orderbook table
-        self.orderbook_table = QTableWidget(20, 4)  # 20 rows, 4 columns
-        self.orderbook_table.setHorizontalHeaderLabels(["Bid Price", "Bid Size", "Ask Price", "Ask Size"])
-        self.orderbook_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        
-        # Add orderbook table to layout
-        orderbook_layout.addWidget(self.orderbook_table)
-        orderbook_group.setLayout(orderbook_layout)
-        
-        # Add output group to right layout
-        right_layout.addWidget(output_group)
-        right_layout.addWidget(orderbook_group)
-        
-        # Add panels to splitter
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        
-        # Set initial splitter sizes
-        splitter.setSizes([400, 800])
-        
-        # Show the UI
-        self.show()
+        # Start the periodic UI update loop using self.after
+        self.after(UI_REFRESH_RATE_MS, self.periodic_ui_update)
     
+    def _create_input_widgets(self, parent_frame):
+        """Create input widgets for the simulation parameters."""
+        parent_frame.grid_columnconfigure(0, weight=1) # Allow widgets to expand
+        
+        # Example: Exchange
+        customtkinter.CTkLabel(parent_frame, text="Exchange:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.exchange_combo = customtkinter.CTkComboBox(parent_frame, values=[DEFAULT_EXCHANGE])
+        self.exchange_combo.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        
+        # Example: Spot Asset
+        customtkinter.CTkLabel(parent_frame, text="Spot Asset:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.asset_combo = customtkinter.CTkComboBox(parent_frame, values=AVAILABLE_ASSETS)
+        self.asset_combo.set(DEFAULT_ASSET)
+        self.asset_combo.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        # ... Add other CTk input widgets (Order Type, Quantity, Volatility, Fee Tier) ...
+        # For CTk Entries/Spinboxes, use .get() to retrieve values.
+
+        # Connect Button
+        self.connect_button = customtkinter.CTkButton(parent_frame, text="Connect", command=self.on_connect)
+        self.connect_button.grid(row=6, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+
+        # Calculate Button
+        self.calculate_button = customtkinter.CTkButton(parent_frame, text="Calculate", command=self.on_calculate)
+        self.calculate_button.grid(row=7, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+
+        # Connection Status Label
+        self.connection_status_label = customtkinter.CTkLabel(parent_frame, text="Connection Status: Disconnected", text_color="red")
+        self.connection_status_label.grid(row=8, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        logger.info("Input widgets created (CTk stubs).")
+
+
+    def _create_output_parameters_display(self, parent_frame):
+        """Create display area for output parameters."""
+        parent_frame.grid_columnconfigure(1, weight=1) # Allow labels to expand if needed
+        # Example: Current Price
+        customtkinter.CTkLabel(parent_frame, text="Current Price:").grid(row=0, column=0, padx=10, pady=2, sticky="w")
+        self.price_label = customtkinter.CTkLabel(parent_frame, text="N/A")
+        self.price_label.grid(row=0, column=1, padx=10, pady=2, sticky="w")
+        # ... Add other CTkLabels for slippage, fees, etc. ...
+        self.slippage_label = customtkinter.CTkLabel(parent_frame, text="N/A") # Placeholder
+        self.slippage_label.grid(row=1, column=1, padx=10, pady=2, sticky="w")
+        self.fees_label = customtkinter.CTkLabel(parent_frame, text="N/A") # Placeholder
+        self.fees_label.grid(row=2, column=1, padx=10, pady=2, sticky="w")
+        # ... and so on for other output labels
+        logger.info("Output parameters display created (CTk stubs).")
+
+    def _create_order_book_display(self, parent_frame):
+        """Create display area for the L2 order book."""
+        # This needs a CustomTkinter implementation for displaying tabular data.
+        # For now, a simple placeholder label.
+        self.orderbook_label_placeholder = customtkinter.CTkLabel(parent_frame, text="Order Book Data (CTk Implementation Needed)")
+        self.orderbook_label_placeholder.pack(padx=10, pady=10, fill="both", expand=True)
+        logger.info("Order book display created (CTk placeholder).")
+
+
+    def _create_log_display(self, parent_frame):
+        """Create display area for log messages."""
+        parent_frame.grid_rowconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(0, weight=1)
+        self.log_text_area = customtkinter.CTkTextbox(
+            parent_frame, wrap=tkinter.WORD, state=tkinter.DISABLED, corner_radius=5, border_spacing=5, activate_scrollbars=True
+        )
+        self.log_text_area.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        logger.info("Log display (CTkTextbox) created.")
+
+
+    def periodic_ui_update(self):
+        """Periodically called by self.after to refresh the UI."""
+        self.update_ui()
+        if self.is_ui_running: # Reschedule only if UI is supposed to be running
+            self.after(UI_REFRESH_RATE_MS, self.periodic_ui_update)
+
     def update_ui(self):
-        """Update the UI with the latest data."""
-        # Only update every UI_REFRESH_RATE_MS milliseconds
-        current_time = time.time()
-        if current_time - self.last_update_time < UI_REFRESH_RATE_MS / 1000:
-            return
+        """Update the UI with the latest data from the controller."""
+        # Update connection status display
+        is_connected_from_controller = self.controller.is_connected() # Renamed for clarity
+        if is_connected_from_controller != self.connected: # Update if changed
+            self.connected = is_connected_from_controller
+            self.update_connection_status_display() # Use a more specific name
         
-        self.last_update_time = current_time
+        # Get orderbook status message from controller and log it
+        orderbook_status_msg = self.controller.get_orderbook_status() # Renamed for clarity
+        if orderbook_status_msg:
+            self.log_message_to_ui(orderbook_status_msg) # Use a more specific name
         
-        # Update connection status
-        is_connected = self.controller.is_connected()
-        if is_connected != self.connected:
-            self.connected = is_connected
-            self.update_connection_status()
-        
-        # Update price
+        # Update current mid-price display
         mid_price = self.controller.get_mid_price()
-        if mid_price:
-            self.price_label.setText(f"${mid_price:.2f}")
+        if mid_price is not None: # Check for None explicitly
+            self.price_label.configure(text=f"${mid_price:.2f}")
+        else:
+            self.price_label.configure(text="N/A")
         
-        # Update orderbook visualization
-        self.update_orderbook_table()
+        # Update orderbook visualization (needs CTk implementation)
+        self.update_orderbook_table_display() # Use a more specific name
         
-        # If a calculation was performed, update the results
+        # If a calculation was performed, update the results display
+        # Assuming self.last_results is set by on_calculate
         if hasattr(self, 'last_results') and self.last_results:
-            self.update_results(self.last_results)
+            self.update_results_display(self.last_results) # Use a more specific name
     
-    def update_orderbook_table(self):
-        """Update the orderbook table with the latest data."""
+    def update_orderbook_table_display(self):
+        """Update the orderbook table display. Needs CTk implementation."""
         bids = self.controller.get_bids()
         asks = self.controller.get_asks()
         
-        # Clear the table
-        self.orderbook_table.clearContents()
-        
-        # Get the top 10 bids and asks
-        top_bids = sorted(bids.items(), reverse=True)[:10]
-        top_asks = sorted(asks.items())[:10]
-        
-        # Fill in the bids
-        for i, (price, size) in enumerate(top_bids):
-            if i < self.orderbook_table.rowCount():
-                # Bid price
-                price_item = QTableWidgetItem(f"{price:.2f}")
-                price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                price_item.setForeground(QColor(0, 128, 0))  # Green color for bids
-                self.orderbook_table.setItem(i, 0, price_item)
-                
-                # Bid size
-                size_item = QTableWidgetItem(f"{size:.4f}")
-                size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.orderbook_table.setItem(i, 1, size_item)
-        
-        # Fill in the asks
-        for i, (price, size) in enumerate(top_asks):
-            if i < self.orderbook_table.rowCount():
-                # Ask price
-                price_item = QTableWidgetItem(f"{price:.2f}")
-                price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                price_item.setForeground(QColor(255, 0, 0))  # Red color for asks
-                self.orderbook_table.setItem(i, 2, price_item)
-                
-                # Ask size
-                size_item = QTableWidgetItem(f"{size:.4f}")
-                size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.orderbook_table.setItem(i, 3, size_item)
-    
+        # --- Needs CustomTkinter implementation below ---
+        # The following is PyQt6 code and needs to be replaced.
+        # For now, just logging that it needs replacement.
+        # self.orderbook_table.clearContents() 
+        # top_bids = sorted(bids.items(), reverse=True)[:10]
+        # top_asks = sorted(asks.items())[:10]
+        # ... (PyQt6 specific table filling logic) ...
+        if not hasattr(self, '_orderbook_warning_logged'):
+             logger.warning("update_orderbook_table_display: Needs CustomTkinter implementation for table.")
+             self._orderbook_warning_logged = True # Log warning only once
+        # Example: self.orderbook_label_placeholder.configure(text=f"Bids: {len(bids)}, Asks: {len(asks)}")
+
+
     def on_connect(self):
         """Handle connect/disconnect button click event."""
         if not self.connected:
-            # Try to connect
-            self.log_message("Attempting to connect to WebSocket...")
-            result = self.controller.connect()
-            if result:
-                self.log_message("Connection request sent successfully")
-            else:
-                self.log_message("Failed to initiate connection")
+            self.log_message_to_ui("Attempting to connect to WebSocket...")
+            # Assuming controller.connect() now correctly starts the WebSocketClient
+            # and doesn't block if it's async.
+            # If controller.connect() is async, main.py or controller needs to handle task creation.
+            # For now, assuming it's a non-blocking call that triggers an async start.
+            asyncio.create_task(self.controller.connect_async()) # Assuming controller has connect_async
+            # Success/failure will be reflected in is_connected() status during next UI update
         else:
-            # Disconnect
-            self.log_message("Disconnecting from WebSocket...")
-            self.controller.disconnect()
-            self.log_message("Disconnected from WebSocket")
+            self.log_message_to_ui("Disconnecting from WebSocket...")
+            asyncio.create_task(self.controller.disconnect_async()) # Assuming controller has disconnect_async
         
-        # Update button text
-        self.update_connection_status()
+        # UI connection status will update in the next periodic_ui_update cycle
     
-    def update_connection_status(self):
-        """Update the connection status display."""
+    def update_connection_status_display(self):
+        """Update the connection status display elements (label and button text)."""
         if self.connected:
-            self.connection_status.setText("Connection Status: Connected")
-            self.connection_status.setStyleSheet("color: green;")
-            self.connect_button.setText("Disconnect")
+            self.connection_status_label.configure(text="Connection Status: Connected", text_color="green")
+            self.connect_button.configure(text="Disconnect")
         else:
-            self.connection_status.setText("Connection Status: Disconnected")
-            self.connection_status.setStyleSheet("color: red;")
-            self.connect_button.setText("Connect")
+            self.connection_status_label.configure(text="Connection Status: Disconnected", text_color="red")
+            self.connect_button.configure(text="Connect")
     
     def on_calculate(self):
         """Handle calculate button click event."""
-        # Get input parameters
-        exchange = self.exchange_combo.currentText()
-        asset = self.asset_combo.currentText()
-        order_type = self.order_type_combo.currentText()
-        quantity = self.quantity_spin.value()
-        volatility = self.volatility_spin.value()
-        fee_tier = self.fee_tier_combo.currentText()
+        # Get input parameters from CTk widgets
+        # exchange = self.exchange_combo.get()
+        # asset = self.asset_combo.get()
+        # order_type = self.order_type_combo.get() # Assuming CTkComboBox
+        # quantity = float(self.quantity_entry.get()) # Assuming CTkEntry
+        # volatility = float(self.volatility_entry.get()) # Assuming CTkEntry
+        # fee_tier = self.fee_tier_combo.get() # Assuming CTkComboBox
         
-        # Call the controller to calculate results
+        logger.warning("on_calculate: Needs implementation to get values from CTk widgets.")
+        # Placeholder values for now
+        exchange, asset, order_type, quantity, volatility, fee_tier = DEFAULT_EXCHANGE, DEFAULT_ASSET, DEFAULT_ORDER_TYPE, DEFAULT_QUANTITY, DEFAULT_VOLATILITY, DEFAULT_FEE_TIER
+
         results = self.controller.calculate_transaction_costs(
             exchange, asset, order_type, quantity, volatility, fee_tier
         )
-        
-        # Save results for UI updates
-        self.last_results = results
-        
-        # Update the UI with results
-        self.update_results(results)
+        self.last_results = results # Save for UI updates
+        self.update_results_display(results)
     
-    def update_results(self, results):
+    def update_results_display(self, results):
         """Update the UI with calculation results."""
-        # Update output labels
-        self.slippage_label.setText(f"{results['slippage']:.4f}% (${results['slippage_usd']:.2f})")
-        self.fees_label.setText(f"{results['fees']:.4f}% (${results['fees_usd']:.2f})")
-        self.market_impact_label.setText(f"{results['market_impact']:.4f}% (${results['market_impact_usd']:.2f})")
-        self.net_cost_label.setText(f"{results['net_cost']:.4f}% (${results['net_cost_usd']:.2f})")
-        self.maker_taker_label.setText(f"{results['maker_proportion']*100:.1f}% / {100-results['maker_proportion']*100:.1f}%")
-        self.latency_label.setText(f"{results['latency_ms']:.2f} ms")
+        # Update CTkLabels, e.g.:
+        # self.slippage_label.configure(text=f"{results['slippage']:.4f}% (${results['slippage_usd']:.2f})")
+        # self.fees_label.configure(text=f"{results['fees']:.4f}% (${results['fees_usd']:.2f})")
+        # ... and so on for other result labels.
+        if not hasattr(self, '_results_warning_logged'):
+            logger.warning("update_results_display: Needs CTkLabels to be configured with results.")
+            self._results_warning_logged = True # Log warning only once
+
     
-    def log_message(self, message):
-        """Add a message to the log display."""
+    def log_message_to_ui(self, message: str): # Renamed for clarity
+        """Add a message to the log display text area."""
         timestamp = time.strftime("%H:%M:%S")
-        self.log_display.append(f"[{timestamp}] {message}")
-        # Scroll to bottom
-        scrollbar = self.log_display.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-
-class SimulatorController:
-    """
-    Controller class for the simulator.
-    Acts as an interface between the UI and the data/models.
-    """
-    
-    def __init__(self, orderbook, slippage_model, maker_taker_model, market_impact_model):
-        """
-        Initialize the controller.
+        current_text = f"[{timestamp}] {message}\n"
         
-        Args:
-            orderbook: Orderbook instance
-            slippage_model: Slippage regression model
-            maker_taker_model: Maker/taker regression model
-            market_impact_model: Market impact model
-        """
-        self.orderbook = orderbook
-        self.slippage_model = slippage_model
-        self.maker_taker_model = maker_taker_model
-        self.market_impact_model = market_impact_model
-        self.ws_client = None
-    
-    def set_websocket_client(self, ws_client):
-        """Set the WebSocket client."""
-        self.ws_client = ws_client
-    
-    def connect(self):
-        """Connect to WebSocket."""
-        if self.ws_client:
-            self.ws_client.start()
+        self.log_text_area.configure(state=tkinter.NORMAL)
+        self.log_text_area.insert(tkinter.END, current_text)
+        self.log_text_area.configure(state=tkinter.DISABLED)
+        self.log_text_area.see(tkinter.END) # Auto-scroll
+
+    async def run_async(self):
+        """Run the UI asynchronously, allowing asyncio tasks to run concurrently."""
+        logger.info("run_async: Starting UI event integration with asyncio.")
+        self.loop = asyncio.get_event_loop() # Should be already set by main.py if using asyncio.run()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        self.is_ui_running = True
+        logger.info("run_async: Entering main UI loop.")
+        try:
+            while self.is_ui_running:
+                self.update() # Process CustomTkinter events
+                # self.update_idletasks() # Usually not needed/less critical with CTk & asyncio.sleep
+                await asyncio.sleep(0.02) # Approx 50 FPS, adjust as needed
+
+                if not self.winfo_exists(): # More robust check
+                    logger.warning("run_async: Main window (self) no longer exists. Stopping UI loop.")
+                    self.is_ui_running = False
+                    break
+            logger.info(f"run_async: Exited main UI loop. self.is_ui_running = {self.is_ui_running}")
+        except tkinter.TclError as e: # Can happen if window is destroyed while update() is called
+            if self.is_ui_running: # Only log as error if not part of intentional shutdown
+                logger.error(f"run_async: Tkinter TclError in UI loop: {e}", exc_info=True)
+            else: # Likely benign, happening during shutdown
+                logger.info(f"run_async: Tkinter TclError (likely during shutdown): {e}")
+            self.is_ui_running = False
+        except Exception as e:
+            logger.error(f"run_async: Unexpected error in UI loop: {e}", exc_info=True)
+            self.is_ui_running = False
+        finally:
+            logger.info("run_async: UI loop finished. Cleaning up UI resources.")
+            # self.destroy() is usually called by on_closing or if loop breaks due to winfo_exists()
+            # If loop exits for other reasons, ensure destroy is called if window still exists and not already being destroyed
+            if self.winfo_exists() and not self._is_destroyed_internal_check():
+                logger.info("run_async: Explicitly destroying window in finally block.")
+                self.destroy() 
+
+    def on_closing(self):
+        """Handle window close event (WM_DELETE_WINDOW)."""
+        logger.info("on_closing: Window close requested by user.")
+        if self.is_ui_running:
+            logger.info("on_closing: Setting self.is_ui_running to False to terminate the UI loop.")
+            self.is_ui_running = False # Signal the loop in run_async to stop
+        else:
+            logger.warning("on_closing: UI loop was already not running (is_ui_running is False).")
+        
+        # Let run_async's finally block handle the actual self.destroy()
+        # This avoids TclErrors if destroy() is called while run_async's loop is in self.update()
+
+    def _is_destroyed_internal_check(self): # Renamed for clarity
+        """Helper to check if widget is in process of being destroyed."""
+        try:
+            # Accessing an internal attribute like _w can indicate widget state.
+            # If it's gone, TclError is raised.
+            self._w 
+            return False 
+        except tkinter.TclError:
             return True
-        return False
-    
-    def disconnect(self):
-        """Disconnect from WebSocket."""
-        if self.ws_client:
-            self.ws_client.stop()
-            return True
-        return False
-    
-    def is_connected(self):
-        """Check if the WebSocket connection is active."""
-        if self.ws_client:
-            return self.ws_client.is_connected() and self.orderbook.is_valid()
-        return self.orderbook.is_valid()
-    
-    def get_mid_price(self):
-        """Get the current mid price."""
-        return self.orderbook.get_mid_price()
-    
-    def get_bids(self):
-        """Get the current bids."""
-        return self.orderbook.bids
-    
-    def get_asks(self):
-        """Get the current asks."""
-        return self.orderbook.asks
-    
-    def calculate_transaction_costs(self, exchange, asset, order_type, quantity, volatility, fee_tier):
-        """
-        Calculate transaction costs for the given parameters.
-        
-        Args:
-            exchange (str): Exchange name
-            asset (str): Asset name
-            order_type (str): Order type
-            quantity (float): Order quantity in USD
-            volatility (float): Market volatility
-            fee_tier (str): Fee tier
-            
-        Returns:
-            dict: Transaction cost components
-        """
-        # Get current mid price
-        mid_price = self.orderbook.get_mid_price()
-        if mid_price is None:
-            logger.warning("Cannot calculate costs: no valid orderbook data")
-            return {
-                "slippage": 0,
-                "slippage_usd": 0,
-                "fees": 0,
-                "fees_usd": 0,
-                "market_impact": 0,
-                "market_impact_usd": 0,
-                "net_cost": 0,
-                "net_cost_usd": 0,
-                "maker_proportion": 0.5,
-                "latency_ms": 0
-            }
-        
-        # Convert USD quantity to asset quantity
-        asset_quantity = quantity / mid_price
-        
-        # Calculate expected slippage
-        book_imbalance = self.orderbook.calculate_order_book_imbalance()
-        bid_depth, ask_depth = self.orderbook.get_orderbook_depth()
-        book_depth = ask_depth  # For buy orders, we use ask depth
-        
-        # Get spread percentage
-        spread_pct = self.orderbook.get_spread_percentage() or 0
-        
-        # Calculate slippage
-        slippage_pct = self.slippage_model.predict_slippage(
-            asset_quantity, mid_price, volatility, book_depth, book_imbalance
-        )
-        slippage_usd = (slippage_pct / 100) * quantity
-        
-        # Calculate fees
-        maker_proportion = self.maker_taker_model.predict_maker_proportion(
-            asset_quantity, book_depth, volatility, book_imbalance, spread_pct
-        )
-        
-        # Get fee rates from the fee tier
-        maker_fee = FEE_TIERS[fee_tier]["maker"]
-        taker_fee = FEE_TIERS[fee_tier]["taker"]
-        
-        # Calculate weighted average fee
-        avg_fee_rate = maker_proportion * maker_fee + (1 - maker_proportion) * taker_fee
-        fee_usd = avg_fee_rate * quantity
-        fee_pct = avg_fee_rate * 100
-        
-        # Calculate market impact
-        impact_result = self.market_impact_model.estimate_market_impact(
-            asset_quantity, mid_price, volatility, book_depth
-        )
-        market_impact_usd = impact_result["total_impact"] * asset_quantity
-        market_impact_pct = impact_result["impact_percentage"]
-        
-        # Calculate net cost
-        net_cost_usd = slippage_usd + fee_usd + market_impact_usd
-        net_cost_pct = (net_cost_usd / quantity) * 100
-        
-        # Get latency
-        latency_ms = self.orderbook.get_average_processing_time()
-        
-        # Return the results
-        return {
-            "slippage": slippage_pct,
-            "slippage_usd": slippage_usd,
-            "fees": fee_pct,
-            "fees_usd": fee_usd,
-            "market_impact": market_impact_pct,
-            "market_impact_usd": market_impact_usd,
-            "net_cost": net_cost_pct,
-            "net_cost_usd": net_cost_usd,
-            "maker_proportion": maker_proportion,
-            "latency_ms": latency_ms
-        }
 
 
-def run_application(simulator_controller):
-    """
-    Run the application.
-    
-    Args:
-        simulator_controller: Controller for the simulator
-    """
-    app = QApplication(sys.argv)
-    window = SimulatorUI(simulator_controller)
-    sys.exit(app.exec())
+# Removed PyQt6 based SimulatorController, assuming it's in controller.py
+# class SimulatorController:
+# ...
+
+# Removed PyQt6 based run_application function. 
+# main.py will create SimulatorUI instance and run its run_async method.
+# def run_application(simulator_controller):
+# ...

@@ -2,9 +2,9 @@
 Orderbook processor for handling L2 market data.
 """
 import time
+import json
 import numpy as np
 from loguru import logger
-import json
 
 class Orderbook:
     """
@@ -21,6 +21,8 @@ class Orderbook:
         self.symbol = None
         self.last_update_time = 0
         self.processing_times = []  # To track processing latency
+        self.status_message = "Waiting for data..."
+        self.received_data = False
         
     def update(self, data):
         """
@@ -32,54 +34,125 @@ class Orderbook:
         start_time = time.time()
         
         try:
-            # Debug the incoming data
-            logger.debug(f"Received data: {json.dumps(data)[:100]}...")
-            
-            # Handle potential different data formats
-            # Check if we have a nested data structure
+            # Debug the incoming data structure more thoroughly
+            logger.debug(f"Data keys: {list(data.keys())}")
+            if "arg" in data:
+                logger.debug(f"Arg: {data['arg']}")
             if "data" in data:
-                # Extract the orderbook data from the nested structure
-                orderbook_data = data["data"][0] if isinstance(data["data"], list) else data["data"]
-            else:
-                orderbook_data = data
+                if isinstance(data["data"], list) and len(data["data"]) > 0:
+                    logger.debug(f"First data item keys: {list(data['data'][0].keys())}")
+                    
+                    # Print sample of bids and asks if they exist
+                    if "bids" in data["data"][0]:
+                        logger.debug(f"First 3 bids: {data['data'][0]['bids'][:3]}")
+                    if "asks" in data["data"][0]:
+                        logger.debug(f"First 3 asks: {data['data'][0]['asks'][:3]}")
             
-            # Update metadata
-            self.timestamp = orderbook_data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            self.exchange = orderbook_data.get("exchange", "OKX")
-            self.symbol = orderbook_data.get("symbol", "BTC-USDT")
-            
-            # Find the bids and asks in the data
-            bids_key = next((k for k in orderbook_data if k.lower() in ["bids", "bid"]), None)
-            asks_key = next((k for k in orderbook_data if k.lower() in ["asks", "ask"]), None)
-            
-            # Update bids
-            if bids_key and orderbook_data[bids_key]:
-                # Clear previous bids
+            # Handle OKX format
+            if "arg" in data and "data" in data:
+                # This is OKX format
+                logger.info("Processing OKX format data")
+                
+                arg = data.get("arg", {})
+                self.exchange = "OKX"
+                self.symbol = arg.get("instId", "BTC-USDT")
+                
+                # Get the orderbook data
+                ob_data = data.get("data", [])
+                if not ob_data or len(ob_data) == 0:
+                    logger.warning("Empty orderbook data received")
+                    self.status_message = "Received empty orderbook data"
+                    return
+                
+                # Get the first orderbook entry
+                orderbook = ob_data[0]
+                
+                # Log full orderbook for debugging
+                logger.info(f"ORDERBOOK DATA: {json.dumps(orderbook)[:500]}")
+                
+                # Extract timestamp
+                self.timestamp = orderbook.get("ts")
+                
+                # Clear previous bids and asks
                 self.bids.clear()
-                
-                # Add new bids
-                for bid in orderbook_data[bids_key]:
-                    if isinstance(bid, list) and len(bid) >= 2:
-                        price = float(bid[0])
-                        quantity = float(bid[1])
-                        self.bids[price] = quantity
-                
-                logger.debug(f"Updated {len(self.bids)} bid prices")
-            
-            # Update asks
-            if asks_key and orderbook_data[asks_key]:
-                # Clear previous asks
                 self.asks.clear()
                 
-                # Add new asks
-                for ask in orderbook_data[asks_key]:
-                    if isinstance(ask, list) and len(ask) >= 2:
-                        price = float(ask[0])
-                        quantity = float(ask[1])
-                        self.asks[price] = quantity
+                # Process bids
+                if "bids" in orderbook and orderbook["bids"]:
+                    logger.info(f"Processing {len(orderbook['bids'])} bids")
+                    for bid in orderbook["bids"]:
+                        if len(bid) >= 2:
+                            try:
+                                price = float(bid[0])
+                                quantity = float(bid[1])
+                                self.bids[price] = quantity
+                            except (ValueError, TypeError) as e:
+                                logger.error(f"Error parsing bid: {bid} - {e}")
                 
-                logger.debug(f"Updated {len(self.asks)} ask prices")
+                # Process asks
+                if "asks" in orderbook and orderbook["asks"]:
+                    logger.info(f"Processing {len(orderbook['asks'])} asks")
+                    for ask in orderbook["asks"]:
+                        if len(ask) >= 2:
+                            try:
+                                price = float(ask[0])
+                                quantity = float(ask[1])
+                                self.asks[price] = quantity
+                            except (ValueError, TypeError) as e:
+                                logger.error(f"Error parsing ask: {ask} - {e}")
                 
+                logger.info(f"Updated orderbook: {len(self.bids)} bids, {len(self.asks)} asks")
+                self.received_data = True
+                self.status_message = "Orderbook updated successfully"
+            
+            # Original format from the project spec
+            elif "bids" in data and "asks" in data:
+                # Standard orderbook format
+                # Update metadata
+                self.timestamp = data.get("timestamp")
+                self.exchange = data.get("exchange")
+                self.symbol = data.get("symbol")
+                
+                # Update bids and asks
+                if "bids" in data:
+                    # Clear previous bids
+                    self.bids.clear()
+                    
+                    # Add new bids
+                    for bid in data["bids"]:
+                        if len(bid) >= 2:
+                            price = float(bid[0])
+                            quantity = float(bid[1])
+                            self.bids[price] = quantity
+                
+                if "asks" in data:
+                    # Clear previous asks
+                    self.asks.clear()
+                    
+                    # Add new asks
+                    for ask in data["asks"]:
+                        if len(ask) >= 2:
+                            price = float(ask[0])
+                            quantity = float(ask[1])
+                            self.asks[price] = quantity
+                            
+                self.received_data = True
+                self.status_message = "Orderbook updated successfully"
+            elif "event" in data:
+                # Process event messages
+                if data.get("event") == "subscribe" and data.get("code") == "0":
+                    logger.info("Subscription confirmed")
+                    self.status_message = "WebSocket subscription confirmed"
+                elif data.get("event") == "error":
+                    logger.error(f"WebSocket error event: {data}")
+                    self.status_message = f"WebSocket error: {data.get('msg', 'Unknown error')}"
+                else:
+                    logger.debug(f"Skipping event message: {data.get('event')}")
+            else:
+                logger.warning(f"Unrecognized data format: {list(data.keys())}")
+                self.status_message = f"Unrecognized data format: {list(data.keys())}"
+                return
+            
             # Record processing time
             end_time = time.time()
             processing_time = (end_time - start_time) * 1000  # Convert to milliseconds
@@ -90,11 +163,19 @@ class Orderbook:
                 self.processing_times = self.processing_times[-100:]
             
             self.last_update_time = end_time
-            logger.debug(f"Orderbook valid: {self.is_valid()}")
+            
+            # Log whether the orderbook is valid
+            valid = self.is_valid()
+            logger.debug(f"Orderbook valid: {valid}")
+            if valid:
+                mid_price = self.get_mid_price()
+                spread = self.get_spread_percentage()
+                logger.info(f"Orderbook: price=${mid_price:.2f}, spread={spread:.4f}%")
             
         except Exception as e:
             logger.error(f"Error updating orderbook: {e}")
-        
+            self.status_message = f"Error updating orderbook: {e}"
+    
     def get_best_bid(self):
         """Get the best (highest) bid price and quantity."""
         if not self.bids:
@@ -284,7 +365,15 @@ class Orderbook:
     
     def is_valid(self):
         """Check if the orderbook has valid data."""
-        return (self.timestamp is not None and 
-                self.bids and 
+        return (self.bids and 
                 self.asks and 
                 self.last_update_time > 0)
+    
+    def get_status(self):
+        """Get current orderbook status."""
+        if self.is_valid():
+            return f"Connected: {self.symbol}, {len(self.bids)} bids, {len(self.asks)} asks"
+        elif self.received_data:
+            return "Partial data received, waiting for complete orderbook"
+        else:
+            return self.status_message
